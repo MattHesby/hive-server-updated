@@ -25,8 +25,6 @@ var express = require('express');
 var PF = require('pathfinding');
 var app = express();
 
-
-
 var games = [];
 var queueSockets = [];
 var gameRunning = false;
@@ -36,7 +34,12 @@ var maps = JSON.parse(fs.readFileSync("maps.json"))
 var replay = JSON.parse(fs.readFileSync("replay.json"))
 var router = express();
 var server = http.createServer(router);
-var io = socketio.listen(server);
+var io = socketio(server, 
+  {
+    cors: {origin: "*"}, 
+    transports: ['websocket', 'polling'],
+    allowEIO3: true
+  });
 
 router.use(express.static(path.resolve(__dirname, 'client')));
 //5 Socket arrays to hold 4 socket connections per game, and there are 5 games max at once
@@ -134,6 +137,10 @@ io.on('connection', function(socket) { // When a new player is registered, add t
     socket.emit("rerunGameData", replay.games[num])
   })
   socket.on("new direction", function(data) {
+    console.log("id", data.id);
+    console.log("idTurn", games[data.gameId].idTurn)
+    console.log("turn", games[data.gameId].turn);
+
     //checking the game turn is still on the player who sent this direction. If it's not, the direction sent is disregarded.  
     if (data.id == games[data.gameId].idTurn) {
       //changing the player's position based on the string, also making sure they're not going off the map or into a barricade.
@@ -151,8 +158,12 @@ io.on('connection', function(socket) { // When a new player is registered, add t
       }
       games[data.gameId].players[games[data.gameId].idTurn].dir = data.dir;
     }
+    else{
+      console.log("failed new direction")
+    }
 
-
+    games[data.gameId].turn++;
+    setTimeout(() => gameLoop(games[data.gameId]), GAME_SPEED)
 
   });
   //Runs when someone connects to the display website
@@ -312,66 +323,73 @@ function startGame(queued) {
   // gameData[ind].teleport = [];
   gameData[ind].pollen = [];
 
-
-  var loop = setInterval(function() {
-    if (games[ind].turn == games[ind].totalTurns + PLAYER_NUMBER) {
-      broadcast("draw", games, displays);
-      clearInterval(loop)
-      resetGame(games[ind])
-
-    }
-    else {
-
-      games[ind].idTurn = games[ind].turn % games[ind].players.length;
+  console.log("starting setTimeout for game")
+  setTimeout(() => gameLoop(games[ind]), GAME_SPEED)
 
 
-
-      //Adding position information to add to the database for replays
-      let posGameData = games[ind].players[games[ind].idTurn].pos;
-      // gameData[ind].turns.push(JSON.parse(JSON.stringify(posGameData)));
-
-      gameData[ind].turns.push(JSON.parse(JSON.stringify(posGameData)));
-
-      let turnData = {
-        "bases": [games[ind].bases[0].pollen, games[ind].bases[1].pollen, games[ind].bases[2].pollen, games[ind].bases[3].pollen],
-        "players": [games[ind].players[0].pollen, games[ind].players[1].pollen, games[ind].players[2].pollen, games[ind].players[3].pollen]
-      }
-
-      // if(gameData[ind].idTurn == ind % 4){
-      gameData[ind].pollen.push(JSON.parse(JSON.stringify(turnData)));
-      // }
-      //adding energy to nodes
-      if (games[ind].turn % 4 == 0) {
-        for (var i = 0; i < games[ind].flowers.length; i++) {
-          games[ind].flowers[i].pollen++;
-        }
-      }
-
-      //checking player collision with nodes
-      for (var i = 0; i < games[ind].flowers.length; i++) {
-        if (games[ind].players[games[ind].idTurn].pos[1] == games[ind].flowers[i].pos[1] && games[ind].players[games[ind].idTurn].pos[0] == games[ind].flowers[i].pos[0]) {
-          games[ind].players[games[ind].idTurn].pollen += games[ind].flowers[i].pollen;
-          games[ind].flowers[i].pollen = 0;
-        }
-      }
-
-
-      playerCollide(ind) //checks player collision
-      checkBase(ind)
-
-
-      games[ind].myBot = games[ind].players[games[ind].idTurn];
-      games[ind].myBase = games[ind].bases[games[ind].idTurn];
-
-
-      broadcast("draw", games, displays);
-      sockets[ind][games[ind].idTurn].emit("update", games[ind]);
-
-      games[ind].turn++;
-    }
-
-  }, GAME_SPEED);
 }
+
+function gameLoop(currentGame) {
+
+  if (currentGame.turn == currentGame.totalTurns + PLAYER_NUMBER) {
+    broadcast("draw", games, displays);
+    clearInterval(loop)
+    resetGame(currentGame)
+
+  }
+  else {
+
+    //TODO: does this return the right turn and ID?
+    currentGame.idTurn = currentGame.turn % currentGame.players.length;
+
+    
+
+    //Adding position information to add to the database for replays
+    let posGameData = currentGame.players[currentGame.idTurn].pos;
+    // gameData[ind].turns.push(JSON.parse(JSON.stringify(posGameData)));
+
+    gameData[currentGame.gameId].turns.push(JSON.parse(JSON.stringify(posGameData)));
+
+    let turnData = {
+      "bases": [currentGame.bases[0].pollen, currentGame.bases[1].pollen, currentGame.bases[2].pollen, currentGame.bases[3].pollen],
+      "players": [currentGame.players[0].pollen, currentGame.players[1].pollen, currentGame.players[2].pollen, currentGame.players[3].pollen]
+    }
+
+    // if(gameData[ind].idTurn == ind % 4){
+    gameData[currentGame.gameId].pollen.push(JSON.parse(JSON.stringify(turnData)));
+    // }
+    //adding energy to nodes
+    if (currentGame.turn % 4 == 0) {
+      for (var i = 0; i < currentGame.flowers.length; i++) {
+        currentGame.flowers[i].pollen++;
+      }
+    }
+
+    //checking player collision with nodes
+    for (var i = 0; i < currentGame.flowers.length; i++) {
+      if (currentGame.players[currentGame.idTurn].pos[1] == currentGame.flowers[i].pos[1] && currentGame.players[currentGame.idTurn].pos[0] == currentGame.flowers[i].pos[0]) {
+        currentGame.players[currentGame.idTurn].pollen += currentGame.flowers[i].pollen;
+        currentGame.flowers[i].pollen = 0;
+      }
+    }
+
+
+    playerCollide(currentGame.gameId) //checks player collision
+    checkBase(currentGame.gameId)
+
+
+    currentGame.myBot = currentGame.players[currentGame.idTurn];
+    currentGame.myBase = currentGame.bases[currentGame.idTurn];
+
+
+    broadcast("draw", games, displays);
+    sockets[currentGame.gameId][currentGame.idTurn].emit("update", currentGame);
+
+
+  }
+
+}
+
 
 // Changes ELO based on win/lose
 function addWin(userName, playersInGame) {
