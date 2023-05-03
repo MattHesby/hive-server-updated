@@ -7,7 +7,7 @@ git push // pushes all changes to github
 */
 
 const PLAYER_NUMBER = 4; //Keep this as 4.
-const GAME_SPEED = 75; //Reccomended: 50-70 for good game visibility and speed. Speed unit of the game in milliseconds
+const GAME_SPEED = 60; //Reccomended: 50-70 for good game visibility and speed. Speed unit of the game in milliseconds
 const turnCount = 1000; //Reccomended: 1000 - 1500 for reasonable game time length. How many turns in a game. One turn is one player moving.
 const randomMap = true; //Reccomended: true. This decides whether the map is randomely generated or not. Randomely generated maps are symmetrical. If this is false, then a map will be chosen from maps.json, predrawn maps.
 const baseStealEnergy = 10; // The Amount of Energy Stolen from another player's base  Higher means more aggressive play 
@@ -109,6 +109,12 @@ games.push(new Game(games.length));
 games.push(new Game(games.length));
 
 io.on('connection', function(socket) { // When a new player is registered, add them to the database after checking the same username doesn't exist.
+  socket.on('disconnect', (reason) => {
+    console.log("socket disconnected because:", reason);
+    socket.disconnect();
+    socket.isStillConnected = false;
+  })
+  
   socket.on("newPlayer", function(obj) {
     console.log("Player requesting to register! Username: " + obj.username + ", key: " + obj.key)
     var hasUserName = false;
@@ -118,6 +124,8 @@ io.on('connection', function(socket) { // When a new player is registered, add t
         hasUserName = true;
       }
     }
+
+    
 
     if (obj.username == "" || obj.username === null) {
       hasUserName = true;
@@ -129,6 +137,14 @@ io.on('connection', function(socket) { // When a new player is registered, add t
       console.log("Registration authorized, user has been added to the playerDatabase!");
     }
   })
+  
+  socket.on("resetAll", function(){
+    console.log("resetting everything");
+    // TODO: write call to reset all games
+    for(let i = 0; i < games.length; i++){
+      resetGame(games[i]);
+    }
+  })
   /* @Desc: Takes new direction from player and determines new position
    * @Params: data{} - dir(srt): direction chosen by player - name(str): name of player sending data
    */
@@ -138,11 +154,31 @@ io.on('connection', function(socket) { // When a new player is registered, add t
   })
   socket.on("new direction", function(data) {
     console.log("id", data.id);
-    console.log("idTurn", games[data.gameId].idTurn)
-    console.log("turn", games[data.gameId].turn);
+    console.log("connected:", socket.isStillConnected)
 
+    // checking to see if player's socket is still connected or not
+    if (!socket.isStillConnected){
+      console.log("player no longer connected, moving player in random direction")
+      //changing the player's position based on the string, also making sure they're not going off the map or into a barricade.
+      
+      let randoDir = ["north", "south", "east", "west"].random()
+    
+      if (randoDir == "north" && games[data.gameId].players[data.id].pos[1] > 0 && checkCollide(games[data.gameId].players[data.id].pos[0], games[data.gameId].players[data.id].pos[1] - 1, games[data.gameId])) {
+        games[data.gameId].players[data.id].pos[1]--;
+      }
+      else if (randoDir == "east" && games[data.gameId].players[data.id].pos[0] <= 18 && checkCollide(games[data.gameId].players[data.id].pos[0] + 1, games[data.gameId].players[data.id].pos[1], games[data.gameId])) {
+        games[data.gameId].players[data.id].pos[0]++;
+      }
+      else if (randoDir == "south" && games[data.gameId].players[data.id].pos[1] <= 18 && checkCollide(games[data.gameId].players[data.id].pos[0], games[data.gameId].players[data.id].pos[1] + 1, games[data.gameId])) {
+        games[data.gameId].players[data.id].pos[1]++;
+      }
+      else if (randoDir == "west" && games[data.gameId].players[data.id].pos[0] > 0 && checkCollide(games[data.gameId].players[data.id].pos[0] - 1, games[data.gameId].players[data.id].pos[1], games[data.gameId])) {
+        games[data.gameId].players[data.id].pos[0]--;
+      }
+      games[data.gameId].players[games[data.gameId].idTurn].dir = data.dir;
+    }
     //checking the game turn is still on the player who sent this direction. If it's not, the direction sent is disregarded.  
-    if (data.id == games[data.gameId].idTurn) {
+    else if (data.id == games[data.gameId].idTurn) {
       //changing the player's position based on the string, also making sure they're not going off the map or into a barricade.
       if (data.dir == "north" && games[data.gameId].players[data.id].pos[1] > 0 && checkCollide(games[data.gameId].players[data.id].pos[0], games[data.gameId].players[data.id].pos[1] - 1, games[data.gameId])) {
         games[data.gameId].players[data.id].pos[1]--;
@@ -164,7 +200,6 @@ io.on('connection', function(socket) { // When a new player is registered, add t
 
     games[data.gameId].turn++;
     setTimeout(() => gameLoop(games[data.gameId]), GAME_SPEED)
-
   });
   //Runs when someone connects to the display website
   socket.on("display", function() {
@@ -211,6 +246,7 @@ io.on('connection', function(socket) { // When a new player is registered, add t
     if (tempname) { //tempname is either false if authentification failed, or it is the name that associates with the key.
       socket.playerName = tempname.name;
       socket.elo = tempname.elo;
+      socket.isStillConnected = true;
       queueSockets.push(socket);
 
       if (queueSockets.length >= PLAYER_NUMBER && !gameRunning) {
@@ -219,11 +255,14 @@ io.on('connection', function(socket) { // When a new player is registered, add t
          * 3. Starts running game
          * 4. sets gameRunning to true
          */
+        console.log("starting game");
         startGame(queueSockets);
       }
     }
     else {
+      socket.emit("no join");
       console.log("player not found, or already connected?")
+      socket.disconnect();
     }
 
   })
@@ -280,6 +319,10 @@ function resetGame(gameToReset) {
 
 
   gameToReset.players.length = 0;
+  console.log("Disconnecting ", sockets[gameToReset.gameId].length, " sockets to reset game." );
+  for (let i = 0; i < sockets[gameToReset.gameId].length; i++){
+    sockets[gameToReset.gameId][i].disconnect();
+  }
   sockets[gameToReset.gameId].length = 0;
 
   games[gameToReset.gameId] = new Game(games.length);
@@ -325,15 +368,13 @@ function startGame(queued) {
 
   console.log("starting setTimeout for game")
   setTimeout(() => gameLoop(games[ind]), GAME_SPEED)
-
-
 }
 
 function gameLoop(currentGame) {
 
   if (currentGame.turn == currentGame.totalTurns + PLAYER_NUMBER) {
     broadcast("draw", games, displays);
-    clearInterval(loop)
+    // clearInterval(loop)
     resetGame(currentGame)
 
   }
@@ -383,18 +424,29 @@ function gameLoop(currentGame) {
 
 
     broadcast("draw", games, displays);
-    sockets[currentGame.gameId][currentGame.idTurn].emit("update", currentGame);
 
+    // Determine if player is connect.  If yes, end game.  Else, call for next action
+    if(!sockets[currentGame.gameId][currentGame.idTurn].isStillConnected){
+      console.log("number of sockets connected: ", sockets[currentGame.gameId.length]);
+      console.log("player disconnected.  ending game");
+      // for(let i = 0; i < sockets[currentGame.gameId].length; i++){
+      //   sockets[currentGame.gameId][i].disconnect();
+      // }
+      // resetGame(currentGame)
 
+      currentGame.turn++;
+      gameLoop(currentGame)
+    }
+    else{
+      sockets[currentGame.gameId][currentGame.idTurn].emit("update", currentGame);
+    }
   }
-
 }
 
 
 // Changes ELO based on win/lose
 function addWin(userName, playersInGame) {
   console.log("player data", playerData);
-
   for (let thing in playerData) {
     if (playerData[thing].username == userName) {
       playerData[thing].score += 15;
